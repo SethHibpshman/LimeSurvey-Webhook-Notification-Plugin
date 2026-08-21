@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <metadata>
+        <name>DiscordNotify</name>
+        <type>plugin</type>
+        <creationDate>2026-08-20</creationDate>
+        <lastUpdate>2026-08-20</lastUpdate>
+        <author>Self</author>
+        <authorUrl>https://github.com/SethHibpshman/LimeSurvey-Webhook-Notification-Plugin</authorUrl>
+        <apiVersion>3.0</apiVersion>
+        <description><![CDATA[Sends a Discord webhook notification when a survey response is completed.]]></description>
+        <license>GPLv3</license>
+        <version>1.0.0</version>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+        <version>6.0</version>
+    </compatibility>
+
+    <!-- Disable the updater system, this is a hand-maintained local plugin -->
+    <updaters disabled="disabled">
+    </updaters>
+</config>
