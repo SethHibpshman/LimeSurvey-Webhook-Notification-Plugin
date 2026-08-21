@@ -1,4 +1,4 @@
-# LimeSurvey Webhook Notification Plugin
+# DiscordNotify
 
 A LimeSurvey plugin that posts a Discord notification whenever a survey response is completed, including the respondent's answers, directly to a channel via a Discord webhook.
 
@@ -30,9 +30,9 @@ No SMTP, no mail server, no extra dependencies. Just a webhook URL.
 1. Download the latest release, or clone this repo, into your LimeSurvey plugins directory:
    ```bash
    cd /path/to/limesurvey/upload/plugins
-   git clone https://github.com/yourusername/DiscordNotify.git
+   git clone https://github.com/SethHibpshman/LimeSurvey-Webhook-Notification-Plugin.git DiscordNotify
    ```
-   The folder must be named exactly `DiscordNotify` so it matches the plugin class name.
+   The folder must be named exactly `DiscordNotify` so it matches the plugin class name (the `DiscordNotify` at the end of the clone command above handles this for you).
 
 2. In LimeSurvey, go to **Configuration > Plugins**, click **Scan files**, find **DiscordNotify** in the list, and click **Activate**.
 
@@ -81,4 +81,4 @@ GPLv3, matching LimeSurvey's own license.
 
 ## Contributing
 
-Issues and pull requests welcome.
+Issues and pull requests welcome at [github.com/SethHibpshman/LimeSurvey-Webhook-Notification-Plugin](https://github.com/SethHibpshman/LimeSurvey-Webhook-Notification-Plugin).
