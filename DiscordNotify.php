@@ -10,6 +10,11 @@ class DiscordNotify extends PluginBase
     static protected $description = 'Sends a Discord webhook notification when a survey response is completed.';
     static protected $name = 'DiscordNotify';
 
+    private $systemColumns = array(
+        'id', 'token', 'submitdate', 'lastpage', 'startlanguage',
+        'seed', 'startdate', 'datestamp', 'ipaddr', 'refurl',
+    );
+
     protected $settings = array(
         'webhookUrl' => array(
             'type' => 'string',
@@ -29,10 +34,25 @@ class DiscordNotify extends PluginBase
             'help' => 'e.g. 2ECC71 for green, E74C3C for red, 3498DB for blue.',
             'default' => '2ECC71',
         ),
+        'embedTitle' => array(
+            'type' => 'string',
+            'label' => 'Embed title text',
+            'default' => 'New survey response',
+        ),
+        'showSurveyId' => array(
+            'type' => 'boolean',
+            'label' => 'Include survey ID',
+            'default' => true,
+        ),
+        'showResponseId' => array(
+            'type' => 'boolean',
+            'label' => 'Include response ID',
+            'default' => true,
+        ),
         'showAnswers' => array(
             'type' => 'boolean',
             'label' => 'Include response answers in the message',
-            'help' => 'Turn off to only post survey name and response ID, no answer content.',
+            'help' => 'Turn off to only post survey name and IDs, no answer content.',
             'default' => true,
         ),
         'showSubmitDate' => array(
@@ -45,6 +65,17 @@ class DiscordNotify extends PluginBase
             'label' => 'Include respondent IP address',
             'help' => 'Off by default for privacy. Useful for spotting duplicate/bot submissions.',
             'default' => false,
+        ),
+        'showAdminLink' => array(
+            'type' => 'boolean',
+            'label' => 'Include a link to view the response in LimeSurvey admin',
+            'default' => false,
+        ),
+        'showTimestampFooter' => array(
+            'type' => 'boolean',
+            'label' => 'Show Discord embed timestamp',
+            'help' => 'The small timestamp Discord renders in the corner of the embed.',
+            'default' => true,
         ),
         'surveyFilter' => array(
             'type' => 'string',
@@ -82,10 +113,15 @@ class DiscordNotify extends PluginBase
         $surveyTitle = $surveyInfo ? $surveyInfo->currentLanguageSettings->surveyls_title : ('Survey ' . $surveyId);
         $language = $surveyInfo ? $surveyInfo->language : 'en';
 
-        $fields = array(
-            array('name' => 'Survey ID',   'value' => (string) $surveyId,   'inline' => true),
-            array('name' => 'Response ID', 'value' => (string) $responseId, 'inline' => true),
-        );
+        $fields = array();
+
+        if ((bool) $this->get('showSurveyId', null, null, true)) {
+            $fields[] = array('name' => 'Survey ID', 'value' => (string) $surveyId, 'inline' => true);
+        }
+
+        if ((bool) $this->get('showResponseId', null, null, true)) {
+            $fields[] = array('name' => 'Response ID', 'value' => (string) $responseId, 'inline' => true);
+        }
 
         if ((bool) $this->get('showSubmitDate', null, null, true)) {
             $fields[] = array('name' => 'Submitted', 'value' => date('Y-m-d H:i:s'), 'inline' => true);
@@ -96,6 +132,13 @@ class DiscordNotify extends PluginBase
             $fields[] = array('name' => 'IP address', 'value' => $ip, 'inline' => true);
         }
 
+        if ((bool) $this->get('showAdminLink', null, null, false)) {
+            $link = $this->buildAdminLink($surveyId, $responseId);
+            if ($link !== null) {
+                $fields[] = array('name' => 'View response', 'value' => '[Open in LimeSurvey](' . $link . ')', 'inline' => false);
+            }
+        }
+
         if ((bool) $this->get('showAnswers', null, null, true)) {
             $answerFields = $this->getAnswerFields($surveyId, $responseId, $language);
             $fields = array_merge($fields, $answerFields);
@@ -104,57 +147,115 @@ class DiscordNotify extends PluginBase
         $botUsername = trim((string) $this->get('botUsername', null, null, 'LimeSurvey'));
         $colorHex = ltrim(trim((string) $this->get('embedColor', null, null, '2ECC71')), '#');
         $colorDecimal = ctype_xdigit($colorHex) ? hexdec($colorHex) : 3066993;
+        $embedTitle = trim((string) $this->get('embedTitle', null, null, 'New survey response'));
+
+        $embed = array(
+            'title'       => $embedTitle !== '' ? $embedTitle : 'New survey response',
+            'description' => $surveyTitle,
+            'color'       => $colorDecimal,
+            'fields'      => $fields,
+        );
+
+        if ((bool) $this->get('showTimestampFooter', null, null, true)) {
+            $embed['timestamp'] = date('c');
+        }
 
         $payload = array(
             'username' => $botUsername !== '' ? $botUsername : 'LimeSurvey',
-            'embeds' => array(
-                array(
-                    'title'       => 'New survey response',
-                    'description' => $surveyTitle,
-                    'color'       => $colorDecimal,
-                    'fields'      => $fields,
-                    'timestamp'   => date('c'),
-                ),
-            ),
+            'embeds'   => array($embed),
         );
 
         $this->postToDiscord($webhookUrl, $payload);
     }
 
+    private function buildAdminLink($surveyId, $responseId)
+    {
+        try {
+            $baseUrl = \Yii::app()->createAbsoluteUrl('admin/responses');
+            // LimeSurvey expects sa/surveyid/id as path segments, not query params.
+            $url = $baseUrl . '/sa/view/surveyid/' . $surveyId . '/id/' . $responseId;
+            return $url;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
     private function getAnswerFields($surveyId, $responseId, $language)
     {
         $fields = array();
+        $log = \Yii::app()->basePath . '/../tmp/runtime/discordnotify.log';
 
         try {
-            $response = \SurveyDynamic::model($surveyId)->findByPk($responseId);
-            if (!$response) {
+            $responseTable = '{{responses_' . $surveyId . '}}';
+            $rawTableName = \Yii::app()->db->tablePrefix . 'responses_' . $surveyId;
+
+            $columnsInfo = \Yii::app()->db->createCommand('SHOW COLUMNS FROM ' . $rawTableName)->queryAll();
+            $answerColumns = array();
+            foreach ($columnsInfo as $col) {
+                $fieldName = $col['Field'];
+                if (!in_array($fieldName, $this->systemColumns, true)) {
+                    $answerColumns[] = $fieldName;
+                }
+            }
+
+            if (empty($answerColumns)) {
                 return $fields;
             }
 
+            $row = \Yii::app()->db->createCommand()
+                ->select(implode(', ', $answerColumns))
+                ->from($responseTable)
+                ->where('id = :id', array(':id' => $responseId))
+                ->queryRow();
+
+            if ($row === false) {
+                return $fields;
+            }
+
+            // Build a code -> question text map. Response table columns are sometimes named
+            // after the custom question code (e.g. "Q001") and sometimes after "Q" + the
+            // internal question ID (e.g. "Q9"), depending on how the question was set up.
+            // Index the map under both possible keys so either naming style resolves.
+            $labelMap = array();
             $questions = \Yii::app()->db->createCommand()
-                ->select('q.qid, q.gid, q.title, ql.question')
+                ->select('q.qid, q.title, ql.language, ql.question')
                 ->from('{{questions}} q')
-                ->join('{{question_l10ns}} ql', 'ql.qid = q.qid AND ql.language = :lang', array(':lang' => $language))
-                ->where('q.sid = :sid AND q.parent_qid = 0', array(':sid' => $surveyId))
+                ->join('{{question_l10ns}} ql', 'ql.qid = q.qid')
+                ->where('q.sid = :sid', array(':sid' => $surveyId))
                 ->queryAll();
 
             foreach ($questions as $question) {
-                $column = $question['title'];
-                $questionText = strip_tags((string) $question['question']);
-                $value = $response->hasAttribute($column) ? $response->getAttribute($column) : null;
-
-                if ($value === null || $value === '') {
+                $text = strip_tags((string) $question['question']);
+                if ($text === '') {
                     continue;
                 }
 
+                $isPreferredLanguage = ($question['language'] === $language);
+                $keys = array($question['title'], 'Q' . $question['qid']);
+
+                foreach ($keys as $key) {
+                    if (!isset($labelMap[$key]) || $isPreferredLanguage) {
+                        $labelMap[$key] = $text;
+                    }
+                }
+            }
+
+            foreach ($answerColumns as $column) {
+                $value = isset($row[$column]) ? $row[$column] : null;
+
+                if ($value === null || trim((string) $value) === '') {
+                    continue;
+                }
+
+                $label = isset($labelMap[$column]) && $labelMap[$column] !== '' ? $labelMap[$column] : $column;
+
                 $fields[] = array(
-                    'name'   => mb_substr($questionText !== '' ? $questionText : $column, 0, 256),
+                    'name'   => mb_substr($label, 0, 256),
                     'value'  => mb_substr((string) $value, 0, 1024),
                     'inline' => false,
                 );
             }
         } catch (\Exception $e) {
-            $log = \Yii::app()->basePath . '/../tmp/runtime/discordnotify.log';
             @file_put_contents($log, date('c') . ' error fetching answers: ' . $e->getMessage() . "\n", FILE_APPEND);
         }
 
@@ -164,6 +265,7 @@ class DiscordNotify extends PluginBase
     private function postToDiscord($url, $payload)
     {
         $json = json_encode($payload);
+        $log = \Yii::app()->basePath . '/../tmp/runtime/discordnotify.log';
 
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_POST, true);
@@ -182,7 +284,6 @@ class DiscordNotify extends PluginBase
         curl_close($ch);
 
         if ($error) {
-            $log = \Yii::app()->basePath . '/../tmp/runtime/discordnotify.log';
             @file_put_contents($log, date('c') . ' cURL error: ' . $error . "\n", FILE_APPEND);
         }
     }
